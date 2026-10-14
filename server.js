@@ -1,3 +1,4 @@
+import {initAttendance,attendanceExtras,saveTeam,saveAttendance} from './attendance.js';
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
@@ -6,6 +7,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 const dir=process.env.DATA_DIR||'data'; mkdirSync(dir,{recursive:true});
 const db=new DatabaseSync(join(dir,'siteledger.sqlite'));
 db.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS owner(id INTEGER PRIMARY KEY CHECK(id=1), salt TEXT NOT NULL, hash TEXT NOT NULL);`);
+initAttendance(db);
 const sessions=new Map();
 const attempts=new Map();
 const kinds=['sites','diaries','employees','attendance','materials','stock','hires','transactions','documents'];
@@ -20,7 +22,7 @@ function validate(kind,b){
  if(['diaries','attendance','stock','hires','transactions','documents'].includes(kind)){need(['siteId']);if(!db.prepare('SELECT id FROM records WHERE id=? AND kind=?').get(Number(b.siteId),'sites'))throw Error('Site does not exist');b.siteId=Number(b.siteId);}
  if(['diaries','attendance','stock','hires','transactions'].includes(kind)){need(['date']);if(!/^\d{4}-\d{2}-\d{2}$/.test(b.date)||Number.isNaN(Date.parse(b.date)))throw Error('Invalid date');}
  if(kind==='diaries')need(['work']);
- if(kind==='attendance'){need(['employeeId']);numeric(['days','overtime']);if(b.days>1||b.overtime>24)throw Error('Attendance exceeds one day or 24 overtime hours');const employee=db.prepare('SELECT body FROM records WHERE id=? AND kind=?').get(Number(b.employeeId),'employees');if(!employee)throw Error('Employee does not exist');const e=JSON.parse(employee.body);b.employeeId=Number(b.employeeId);const rows=db.prepare("SELECT body FROM records WHERE kind='attendance'").all().map(r=>JSON.parse(r.body)).filter(r=>r.employeeId===b.employeeId&&r.date===b.date);if(rows.reduce((s,r)=>s+r.days,0)+b.days>1||rows.reduce((s,r)=>s+r.overtime,0)+b.overtime>24)throw Error('Combined attendance across sites exceeds daily limits');b.rate=e.rate;b.overtimeRate=e.overtimeRate;b.payType=e.payType;}
+
  if(kind==='stock'){need(['materialId','movement']);numeric(['quantity','cost']);if(b.quantity<=0)throw Error('Quantity must be greater than zero');if(!['Opening','Received','Used','Waste','Transfer'].includes(b.movement))throw Error('Invalid movement');b.materialId=Number(b.materialId);if(!db.prepare('SELECT id FROM records WHERE id=? AND kind=?').get(b.materialId,'materials'))throw Error('Material does not exist');if(['Used','Waste','Transfer'].includes(b.movement)){const rows=db.prepare("SELECT body FROM records WHERE kind='stock'").all().map(r=>JSON.parse(r.body));const balance=rows.reduce((sum,r)=>sum+(r.siteId===b.siteId&&r.materialId===b.materialId?(['Opening','Received'].includes(r.movement)?r.quantity:-r.quantity):0)+(r.toSiteId===b.siteId&&r.materialId===b.materialId?r.quantity:0),0);if(b.quantity>balance)throw Error('Insufficient site stock');}if(b.movement==='Transfer'){b.toSiteId=Number(b.toSiteId);if(b.toSiteId===b.siteId||!db.prepare('SELECT id FROM records WHERE id=? AND kind=?').get(b.toSiteId,'sites'))throw Error('Choose a different destination site');}else delete b.toSiteId;}
  if(kind==='hires'){need(['vehicle','supplier']);numeric(['units','rate','paid']);if(b.paid>b.units*b.rate)throw Error('Paid exceeds hire total');}
  if(kind==='transactions'){need(['type','description']);numeric(['amount']);if(!['Expense','Client payment','Salary advance','Salary payment'].includes(b.type))throw Error('Invalid transaction type');if(b.type.startsWith('Salary')){b.employeeId=Number(b.employeeId);if(!db.prepare('SELECT id FROM records WHERE id=? AND kind=?').get(b.employeeId,'employees'))throw Error('Choose an employee');}}
@@ -42,7 +44,12 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/api/logout'){sessions.delete(token);res.setHeader('Set-Cookie','session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return send(res,200,{ok:true});}
  if(url.pathname.startsWith('/api/')){
  if(!authenticated)return send(res,401,{error:'Please sign in'});
- if(url.pathname==='/api/data'&&req.method==='GET'){const result=Object.fromEntries(kinds.map(k=>[k,[]]));for(const r of db.prepare('SELECT * FROM records ORDER BY id DESC').all())result[r.kind].push({...JSON.parse(r.body),id:r.id});return send(res,200,result);}
+ if(url.pathname==='/api/data'&&req.method==='GET'){const result=Object.fromEntries(kinds.map(k=>[k,[]]));for(const r of db.prepare('SELECT * FROM records ORDER BY id DESC').all())result[r.kind].push({...JSON.parse(r.body),id:r.id});return send(res,200,{...result,...attendanceExtras(db)});}
+ if(url.pathname==='/api/teams'&&req.method==='PUT')return send(res,200,saveTeam(db,await body(req)));
+ if(url.pathname==='/api/attendance/bulk'&&req.method==='POST')return send(res,200,saveAttendance(db,await body(req)));
+ if(url.pathname==='/api/attendance'&&req.method==='POST'){const b=await body(req);const result=saveAttendance(db,{siteId:b.siteId,date:b.date,rows:[b]});return send(res,201,result.rows[0]);}
+ if(/^\/api\/attendance\/\d+$/.test(url.pathname)&&req.method==='PUT'){const b=await body(req);const result=saveAttendance(db,{siteId:b.siteId,date:b.date,reason:b.reason,rows:[{...b,id:Number(url.pathname.split('/')[3])}]});return send(res,200,result);}
+ if(url.pathname.startsWith('/api/attendance'))return send(res,405,{error:'Method not allowed'});
  const kind=url.pathname.split('/')[2];if(!kinds.includes(kind))return send(res,404,{error:'Not found'});
  if(req.method==='PUT'){if(!['sites','employees','diaries','hires','transactions'].includes(kind))return send(res,405,{error:'This register is append-only'});const id=Number(url.pathname.split('/')[3]);if(!db.prepare('SELECT id FROM records WHERE id=? AND kind=?').get(id,kind))return send(res,404,{error:'Record not found'});const b=validate(kind,await body(req));db.prepare('UPDATE records SET body=? WHERE id=? AND kind=?').run(JSON.stringify(b),id,kind);return send(res,200,{...b,id});}
  if(req.method==='POST'){const b=validate(kind,await body(req));const r=db.prepare('INSERT INTO records(kind,body) VALUES(?,?)').run(kind,JSON.stringify(b));return send(res,201,{...b,id:Number(r.lastInsertRowid)});}

@@ -20,6 +20,10 @@ test('persistent owner workspace, cross-site attendance and stock accounting',as
  const hire=await add('hires',{siteId:a.id,date:'2026-10-14',vehicle:'Excavator',supplier:'Local hire',units:8,rate:4000,paid:10000});assert.equal((await call('hires/'+hire.id,'PUT',{...hire,paid:32000})).status,200);
  await add('transactions',{siteId:a.id,date:'2026-10-14',type:'Salary advance',description:'Weekly advance',employeeId:e.id,amount:1000});await add('documents',{siteId:a.id,name:'Receipt',category:'Receipt',mime:'text/plain',data:Buffer.from('receipt contents').toString('base64'),filename:'receipt.txt'});
  let all=(await call('data')).body;assert.equal(all.attendance.reduce((s,r)=>s+r.days*r.rate+r.overtime*r.overtimeRate,0),5000);assert.equal(all.stock.filter(r=>r.siteId===a.id).reduce((s,r)=>s+(r.movement==='Opening'?r.quantity:-r.quantity),0),30);assert.equal(all.hires[0].paid,32000);
- await new Promise(r=>{child.once('exit',r);child.kill();});child=start();await ready();cookie='';assert.equal((await call('auth')).body.setup,false);await call('auth','POST',{password:'a-secure-test-password'});all=(await call('data')).body;assert.equal(all.sites.length,2);assert.equal(all.documents.length,1);
+ assert.equal((await call('teams','PUT',{siteId:a.id,employeeIds:[e.id]})).status,200);
+ const bulk=await call('attendance/bulk','POST',{siteId:a.id,date:'2026-10-15',rows:[{employeeId:e.id,days:1,overtime:2}]});assert.equal(bulk.status,200);const entry=bulk.body.rows[0];
+ assert.equal((await call('attendance/'+entry.id,'PUT',{...entry,days:.5,reason:'Half-day correction'})).status,200);
+ assert.equal((await call('attendance/invalid','POST',{siteId:a.id})).status,405);
+ await new Promise(r=>{child.once('exit',r);child.kill();});child=start();await ready();cookie='';assert.equal((await call('auth')).body.setup,false);await call('auth','POST',{password:'a-secure-test-password'});all=(await call('data')).body;assert.equal(all.sites.length,2);assert.equal(all.documents.length,1);assert.equal(all.teams[0].employeeIds[0],e.id);assert.equal(all.attendanceHistory.length,1);assert.equal(all.attendance.find(r=>r.id===entry.id).days,.5);
  }finally{child.kill();rmSync(dir,{recursive:true,force:true});}
 });

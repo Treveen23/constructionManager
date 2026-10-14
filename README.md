@@ -20,16 +20,18 @@ Optional configuration: `PORT`, `HOST`, `DATA_DIR` (defaults to `data`), `COOKIE
 1. Create projects with client, location, budget, dates and status.
 2. Enter daily diaries for work completed, weather, progress and problems. Attach photos separately under Documents.
 3. Add material units and minimum stock thresholds. Record opening stock, receipts, usage, wastage and transfers. Cost is the **total batch value**, not the per-unit rate. Consumption and transfers cannot exceed current stock.
-4. Add workers with a daily rate or monthly base salary and individual overtime hourly rate. Record attendance at each site. Split a day between sites using fractions, such as 0.5 + 0.5. Combined attendance cannot exceed one day or 24 overtime hours per employee/date. Rates are captured when attendance is saved, preserving historical entries if employee rates change.
+4. Add workers with a daily rate or monthly base salary and individual overtime hourly rate. Under **Team & payroll → Manage teams**, assign employees to their regular sites (an employee can belong to several). Use **Bulk attendance**, select a site/date, and load the sheet. Use **Mark all present**, adjust half-days (0.5), absences (0), and overtime, then save once. Uncheck rows to leave them unchanged. **Copy yesterday’s team** copies only the worker list, not yesterday’s hours. **Show all employees** includes workers outside the regular team. Split a day between sites using fractions, such as 0.5 + 0.5. Combined attendance cannot exceed one day or 24 overtime hours per employee/date. Rates are captured when attendance is saved, preserving historical entries if employee rates change.
 5. Select a payroll period. Daily pay is days × recorded daily rate + overtime. Monthly payroll adds one full current base salary, so select one calendar month for those workers. Advances and salary payments within that period reduce the balance. Prior-period unpaid balances and advance carry-forward are not automated.
 6. Record hire units, rate and amounts paid. Use Edit / pay to update paid amounts. Record general expenses, client payments, salary advances and salary payments in Accounts. Do not duplicate material or hire costs as expenses.
 7. Upload PDFs, JPG/PNG/WebP photos or text documents up to 5 MB. Download documents and export registers as CSV for Excel.
+
+Existing databases are upgraded automatically on startup by creating team and correction-history tables without replacing existing records.
 
 ## Current boundaries
 
 This is a first working version, not statutory accounting software. Site costs include material opening/receipt values, daily wages, overtime, hire accruals and general expenses. Monthly base salary allocation, cost redistribution on stock transfers, supplier credit ledgers, tax reports, automated weekly payroll posting, carry-forward payroll balances and Excel imports are not implemented. No profit figure is presented because these cost allocations are incomplete.
 
-Projects, diaries, employees, hires and transactions can be edited. Attendance and stock movements are append-only in this version; correction/reversal workflows are a follow-up requirement. Stock checks use entry order, not historical balances for backdated movements. Owner-only access; no roles or employee accounts.
+Projects, diaries, employees, hires and transactions can be edited. Attendance can be corrected using **Correct** in the register or by reloading a saved bulk sheet. A reason is required for changes, original pay rates are retained, and **History** shows before/after values. Set both days and overtime to zero to cancel a mistaken entry. Version checks prevent stale sheets from overwriting newer corrections; bulk saves succeed completely or make no changes. The salary-payment warning checks for any payment to that worker on or after the attendance date; payments are not yet linked to closed payroll periods, so it is a review flag rather than proof that the entry was paid. Stock movements remain append-only; stock correction/reversal workflows are a follow-up requirement. Stock checks use entry order, not historical balances for backdated movements. Owner-only access; no roles or employee accounts.
 
 ## Validation
 
@@ -38,7 +40,7 @@ npm run check
 npm test
 ```
 
-Integration tests exercise owner authentication, project creation, cross-site attendance limits, payroll amounts, transfers, insufficient stock rejection, hire payments, document storage and persistence through a server restart. They use temporary databases and do not modify live records.
+Integration tests exercise owner authentication, project creation, cross-site attendance limits, payroll amounts, transfers, insufficient stock rejection, hire payments, document storage and persistence through a server restart. Additional tests cover team assignments, all-or-nothing bulk saving, duplicate prevention, stale versions, correction history, preservation of original rates and legacy records. They use temporary databases and do not modify live records.
 
 ## Backups
 
